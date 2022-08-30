@@ -1,7 +1,7 @@
 import numpy as np
 from Bio.SeqIO import parse
 from pickle import dump, load
-from methods import collect_variant_counts, is_superset, is_subset, local_filter_seqs, adjust_letter, extend_template, generate_reference_freqs
+from methods import collect_variant_counts, is_superset, is_subset, local_filter_seqs, adjust_letter, extend_template, generate_reference_freqs, change_subset_motif
 
 
 
@@ -16,6 +16,7 @@ parser.add_argument('-out', help='output file', type=str, default='output.txt')
 parser.add_argument('-max_motifs', help='the maximum expected number of motifs extracted', default=20, type=int)
 parser.add_argument('-min_conf', help='the minimal confidence value. Default is 1000', type=int, default=1000)
 parser.add_argument('-ref_index', help='precalculatd dumped reference motifs file (will be created if not specified)', type=str, default=None)
+
 
 
 args = parser.parse_args()
@@ -55,8 +56,34 @@ else:
         dump(ref_motifs_counter, fout)
 
 
+import os
+
+try:
+    os.mkdir('seq_iter')
+except FileExistsError:
+    pass
+
+
+
+ITERATION = 1
+
+
+
+
 new_seqs = seqs.copy()
+with open('seq_iter/seqs_iter_{}.fasta'.format(ITERATION), 'w') as fseqiter:
+
+    for seq in new_seqs:
+        fseqiter.write('>')
+        fseqiter.write(seq)
+        fseqiter.write('\n')
+        fseqiter.write(seq)
+        fseqiter.write('\n')
+
 seq_array = np.array([list(s) for s in new_seqs])
+
+
+initial_seq_array = seq_array.copy()
 
 
 MOTIFS_SET = []
@@ -95,7 +122,7 @@ while variants_counter_list[0][0] > args.min_conf:
     
     for pos in positions_to_adjust:
 
-        adjusted_pos_letter = adjust_letter(seq_array, extended_top_variant, pos[0], reference)
+        adjusted_pos_letter = adjust_letter(initial_seq_array, extended_top_variant, pos[0], reference)
         modifiable_extended_top_variant[1][pos[1]] = adjusted_pos_letter
 
     extended_top_variant = (
@@ -125,15 +152,34 @@ while variants_counter_list[0][0] > args.min_conf:
         DETAILED_MOTIF_SET.append(extended_top_variant)
     
     
+    else:
+        print('{} already has a supermotif!'.format(extended_top_variant))
+        
+        extended_top_variant = change_subset_motif(
+            DETAILED_MOTIF_SET[i],
+            extended_top_variant,
+            edgelength=2
+        )
+        print('Changed to {}'.format(extended_top_variant))
+        
+
     if len(MOTIFS_SET) == args.max_motifs:
         break
 
-    else:
-        print('{} already has a supermotif!'.format(extended_top_variant[1]))
 
     print(MOTIFS_SET)
 
     new_seqs = local_filter_seqs(new_seqs, extended_top_variant[2], extended_top_variant[1])
+
+    
+    with open('seq_iter/seqs_iter_{}.fasta'.format(ITERATION), 'w') as fseqiter:
+
+        for seq in new_seqs:
+            fseqiter.write('>')
+            fseqiter.write(seq)
+            fseqiter.write('\n')
+            fseqiter.write(seq)
+            fseqiter.write('\n')
 
 
     seq_array = np.array([list(s) for s in new_seqs])

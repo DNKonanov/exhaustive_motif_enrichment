@@ -1,13 +1,13 @@
 import numpy as np
 from itertools import combinations, product
 import re
-from seq_processing import gen_variants, letter_codes_rev
-from scipy.stats import chi2_contingency
+from seq_processing import gen_variants, letter_codes_rev, letter_anticodes
+from scipy.stats import chi2_contingency, mode
 
 
 
 regular_letters = ['A','G','C','T']
-
+non_regular_letters = ['M', 'R', 'W', 'S', 'Y','K', 'V', 'H', 'D','B']
 
 
 def filter_pos_variants_l3(pos_variants):
@@ -178,9 +178,14 @@ def generate_reference_freqs(reference, length, lengths=(4,5,6)):
 
 
 # check if motif2 is superset of motif1
-def is_superset(motif1, motif2, edgelength=3):
+def is_superset(motif1, motif2, edgelength=2):
 
-    extended_motif1 = 'N' * edgelength + motif1 + 'N' * edgelength
+    # just a patch
+    if len(motif2) <= len(motif1):
+        extended_motif1 = motif1
+
+    else:
+        extended_motif1 = 'N' * edgelength + motif1 + 'N' * edgelength
     
     motif1_variants = gen_variants(extended_motif1)
     motif2_variatns = gen_variants(motif2)
@@ -203,13 +208,12 @@ def is_superset(motif1, motif2, edgelength=3):
 
 
 
-def is_subset(motif1, motif2, edgelength=3):
+def is_subset(motif1, motif2, edgelength=2):
     return is_superset(motif2, motif1, edgelength=edgelength)
 
 
 def collect_variant_counts(seq_array, ref_motifs_counter, N_REF, lengths=(4,5,6)):
 
-    variants_counter = {}
     variants_counter_list = {}
 
     N_VARIANT = len(seq_array)
@@ -217,7 +221,6 @@ def collect_variant_counts(seq_array, ref_motifs_counter, N_REF, lengths=(4,5,6)
     for LENGTH in lengths:
 
         print('\tOBSERVING MOTIFS WITH LENGTH OF', LENGTH)
-        variants_counter[LENGTH] = {}
         variants_counter_list[LENGTH] = []
 
         pos_variants = list(combinations(range(0,11), r=LENGTH))
@@ -234,8 +237,6 @@ def collect_variant_counts(seq_array, ref_motifs_counter, N_REF, lengths=(4,5,6)
                     reference_count = ref_motifs_counter[LENGTH][(motif_variant, pos_variant)]
 
                 except KeyError:
-                    variants_counter[LENGTH][(motif_variant, pos_variant)] = 0
-
                     variants_counter_list[LENGTH].append((0, motif_variant, pos_variant))
                     continue
 
@@ -243,8 +244,6 @@ def collect_variant_counts(seq_array, ref_motifs_counter, N_REF, lengths=(4,5,6)
 
                 
                 if variant_count == 0 and reference_count == 0:
-                    variants_counter[LENGTH][(motif_variant, pos_variant)] = variant_count
-
                     variants_counter_list[LENGTH].append((0, motif_variant, pos_variant))
                     continue
 
@@ -258,8 +257,6 @@ def collect_variant_counts(seq_array, ref_motifs_counter, N_REF, lengths=(4,5,6)
 
                 # chi2_log_pval = -np.log10(chi2_result[1])
                 chi2_statistic = chi2_result[0]
-
-                variants_counter[LENGTH][(motif_variant, pos_variant)] = variant_count
 
                 variants_counter_list[LENGTH].append((chi2_statistic, motif_variant, pos_variant))
 
@@ -337,7 +334,6 @@ def get_significant_letters(sub_seq_array, top_variant, pos, reference, threshol
     print(reference_letter_freqs)
     print(variant_subset_letter_freqs)
     print(ref_vs_variant_ratios)
-
     print(significant_letters)
 
     return tuple(sorted(list(significant_letters)))
@@ -350,6 +346,94 @@ def adjust_letter(seq_array, top_variant, pos, reference, threshold_ratio=5):
     pos_letters = get_significant_letters(sub_seq_array, top_variant, pos, reference, threshold_ratio=threshold_ratio)
 
     return letter_codes_rev[pos_letters]
+
+
+def change_subset_motif(supermotif, submotif, edgelength=2):
+    
+    extended_supermotif = 'N'*edgelength + ''.join(supermotif[1]) + 'N'*edgelength
+    
+    super_variants = gen_variants(extended_supermotif)
+    sub_variants = gen_variants(''.join(submotif[1]))
+    
+    shifts = []  
+    for subvariant in sub_variants:
+        for supervariant in super_variants:
+            if subvariant in supervariant:
+                shift = edgelength - supervariant.find(subvariant)
+                shifts.append(shift)
+    
+    shift = mode(shifts).mode[0]
+
+    left_pos = max(0, submotif[2][0] + shift)
+    right_pos = min(11, submotif[2][0] + shift + len(supermotif[2]))
+
+    print('Shift:\t', shift)
+
+    # check left edge case 
+    if shift < 0:
+        adjusted_subvariant = (
+            None,
+            supermotif[1][-shift:],
+            tuple(range(submotif[2][0], submotif[2][0] + len(supermotif[1][-shift:])))
+        )
+
+    
+    # check rigth edge case
+    elif submotif[1][-1] in regular_letters and submotif[2][-1] == 10 and supermotif[1][-1] == 'N':
+        adjusted_subvariant = (
+            None,
+            supermotif[1][:-1],
+            tuple(range(left_pos, 11))
+        )
+
+    # common case
+    else:
+        adjusted_subvariant = (
+            None,
+            supermotif[1],
+            tuple(range(left_pos, right_pos))
+        )
+
+    
+    # just a patch, must be formalized!!
+    if len(adjusted_subvariant[1]) != len(adjusted_subvariant[2]):
+        adjusted_subvariant = [
+            None,
+            supermotif[1],
+            tuple(range(left_pos, left_pos + len(supermotif[1])))
+        ]  
+        while adjusted_subvariant[2][-1] > 10:
+            adjusted_subvariant[1] = adjusted_subvariant[1][:-1]
+            adjusted_subvariant[2] = adjusted_subvariant[2][:-1]
+    
+    return tuple(adjusted_subvariant)
+
+
+
+def adjust_motif(motif, current_motifs_set):
+
+    cut_motif_set = set()
+
+    for current_motif in current_motifs_set:
+        cut_current_motif = [
+            None,
+            current_motif[1],
+            current_motif[2]
+        ]
+        if current_motifs_set[1][0] == 'N':
+            cut_current_motif[1] = cut_current_motif[1][1:]
+            cut_current_motif[2] = cut_current_motif[2][1:]
+        
+        if current_motifs_set[1][-1] == 'N':
+            cut_current_motif[1] = cut_current_motif[1][:-1]
+            cut_current_motif[2] = cut_current_motif[2][:-1]
+        
+        cut_motif_set.add(cut_current_motif)
+
+    
+            
+    
+    pass
 
 
 
